@@ -1,0 +1,228 @@
+--How many pizzas were ordered?
+--How many unique customer orders were made?
+--How many successful orders were delivered by each runner?
+--How many of each type of pizza was delivered?
+--How many Vegetarian and Meatlovers were ordered by each customer?
+--What was the maximum number of pizzas delivered in a single order?
+--For each customer, how many delivered pizzas had at least 1 change and how many had no changes?
+--How many pizzas were delivered that had both exclusions and extras?
+--What was the total volume of pizzas ordered for each hour of the day?
+--What was the volume of orders for each day of the week?
+
+--CHECKING EACH DATASET
+--customer_orders
+--pizza_names
+--pizza_recipes
+--pizza_toppings
+--runner_orders
+--runners
+
+--customer_orders
+--change exclusions null value and extra null value into no exclusions and no extras 
+select exclusions
+from customer_orders as co2;
+
+select * from temp_customer_orders;
+--update exclusions column
+update temp_customer_orders 
+set exclusions = ''
+where exclusions = '0' or 
+where exclusions = 'null';
+--update extras column
+update temp_customer_orders 
+set extras = ''
+where extras is null
+or extras = '0' 
+or extras = 'null';
+
+--ALTER TABLE pizza_runner.customer_orders ALTER COLUMN exclusions TYPE varchar(50) USING exclusions::varchar;
+
+--pizza_names
+--no problem
+select *
+into temp pizzaasdsa
+from pizza_names as pn;
+
+---how to change data type(not related to the cleansing data)
+select *, pizza_id::int from pizzaasdsa 
+alter table pizzaasdsa 
+alter column pizza_id type int 
+using pizza_id::integer;
+
+--pizza_recipes
+--no problem 
+select * 
+from pizza_recipes;
+
+--pizza_toppings
+--no problem
+select *
+from pizza_toppings as pt; 
+
+--runner_orders
+--create a temp table to store cleansing data
+--update pickup time, distance, duration, cancellation
+
+SELECT order_id, runner_id,
+  CASE 
+    WHEN pickup_time LIKE 'null' THEN ' '
+    ELSE pickup_time 
+    END AS pickup_time,
+  CASE 
+    WHEN distance LIKE 'null' THEN ' '
+    WHEN distance LIKE '%km' THEN TRIM('km' from distance) 
+    ELSE distance END AS distance,
+  CASE 
+    WHEN duration LIKE 'null' THEN ' ' 
+    WHEN duration LIKE '%mins' THEN TRIM('mins' from duration) 
+    WHEN duration LIKE '%minute' THEN TRIM('minute' from duration)        
+    WHEN duration LIKE '%minutes' THEN TRIM('minutes' from duration)       
+    ELSE duration END AS duration,
+  CASE 
+    WHEN cancellation IS NULL or cancellation LIKE 'null' THEN ''
+    ELSE cancellation END AS cancellation
+--INTO temp_runner_orders
+FROM runner_orders;
+
+---
+---Second option to clean/trim string in runner orders table
+select *, trim(replace(replace(distance, 'km',''),'null','0')) as distancefixed
+,left(replace(duration,'null','0'),2) as durationfixed
+,replace(pickup_time,'null','') as pickuptimefixed
+,coalesce(replace(cancellation,'null',''),'') as cancellationfixed
+into temp_runner_orders_v2
+from runner_orders as ro 
+
+select *
+from temp_runner_orders_v2;
+---drop 4 column existed column in the temp runner order v2 table
+alter table temp_runner_orders_v2
+drop column cancellation; 
+
+--change column type (distancefixed=float),durationfixed=int,pickuptimefixed=date
+alter table temp_runner_orders_v2
+alter column distancefixed type float
+USING distancefixed::double precision;
+--
+alter table temp_runner_orders_v2
+alter column durationfixed  type int
+USING durationfixed ::integer ;
+
+--
+ALTER TABLE temp_runner_orders_v2  
+ALTER COLUMN pickuptimefixed  TYPE DATE USING to_date(pickuptimefixed , 'YYYY-MM-DD');
+
+---change temp_customer_orders column type 
+select * from temp_customer_orders as tco2;
+
+alter table temp_customer_orders 
+alter column exclusions  type int
+USING exclusions  ::integer ;
+----Questions
+--How many pizzas were ordered?
+select count(order_id) as pizza_ordered
+from temp_customer_orders as tco;
+
+--How many unique customer orders were made?
+select count(distinct order_id) as unique_customer
+from temp_customer_orders as tco2; 
+
+--How many successful orders were delivered by each runner?
+select runner_id,count(order_id) as order_successful
+from temp_runner_orders_v2
+where distancefixed <> 0
+group by runner_id;
+
+--How many of each type of pizza was delivered?
+select pn.pizza_name, count(tco.pizza_id)
+from temp_customer_orders as tco  
+join temp_runner_orders_v2  as tro
+on tco.order_id = tro.order_id
+join pizza_names as pn 
+on pn.pizza_id = tco.pizza_id 
+where distancefixed <> 0
+group by pn.pizza_name
+
+--How many Vegetarian and Meatlovers were ordered by each customer?
+select *, sum(order_count)over(partition by customer_id) as totalorderedpercustomer
+from(
+select customer_id, pizza_name , count(*) as order_count
+from temp_customer_orders as tco
+join pizza_names as pn 
+on tco.pizza_id = pn.pizza_id 
+group by customer_id, pizza_name
+order by customer_id asc
+) t1
+order by customer_id asc;
+
+--What was the maximum number of pizzas delivered in a single order?
+with pizzaodered as(
+select tco.order_id,count(*) as ordered 
+from temp_customer_orders as tco
+join temp_runner_orders_v2 as tce
+on tco.order_id = tce.order_id 
+where distancefixed <>0
+group by tco.order_id 
+)
+select max(ordered) as maxorder
+from pizzaodered;
+
+--For each customer, how many delivered pizzas had at least 1 change and how many had no changes?
+select tco.customer_id,
+sum(case when exclusions <> '' or extras <> '' then 1 else 0 end) as changeonpizza,
+sum(case when exclusions = '' and extras = '' then 1 else 0 end) as nochange
+from temp_customer_orders as tco 
+join temp_runner_orders_v2 as tce 
+on tco.order_id = tce.order_id 
+where durationfixed <> 0
+group by tco.customer_id  
+order by tco.customer_id  asc
+
+--How many pizzas were delivered that had both exclusions and extras?
+with pizzawithexclusionandextras as(
+select tco.customer_id,
+sum(case when exclusions <> '' and extras <> '' then 1 else 0 end) as changeonpizza
+from temp_customer_orders as tco 
+join temp_runner_orders_v2 as tce 
+on tco.order_id = tce.order_id 
+where durationfixed <> 0
+group by tco.customer_id  
+order by tco.customer_id  asc
+)
+select * from pizzawithexclusionandextras
+where changeonpizza <>0 
+
+--What was the total volume of pizzas ordered for each hour of the day?
+select count(order_id), date_part('hour', order_time) as hour_ordered
+from temp_customer_orders as tco 
+group by hour_ordered
+order by hour_ordered asc
+
+--What was the volume of orders for each day of the week?
+with weeklyvolume as(
+select order_id, order_time,
+extract(dow from order_time) as dayofweek
+from temp_customer_orders as tco 
+)
+select dayofweek,count(*),
+case when dayofweek = 0 then 'Sunday'
+when dayofweek = 1 then 'Monday'
+when dayofweek = 2 then 'Tuesday'
+when dayofweek = 3 then 'Wenesday'
+when dayofweek = 4 then 'Thursday'
+when dayofweek = 5 then 'Friday'
+when dayofweek = 6 then 'Saturday'
+end as dddd
+from weeklyvolume 
+group by dayofweek
+order by dayofweek 
+
+--How many runners signed up for each 1 week period?
+with runnersignup as (
+select *,count(*),TO_CHAR( registration_date , 'W' )::integer as weekofmonth,date_part('dow',registration_date) as hari
+from runners as r 
+group by runner_id, registration_date
+order by runner_id 
+)
+select *, sum(count)over(partition by weekofmonth) as totalperweek
+from runnersignup 
